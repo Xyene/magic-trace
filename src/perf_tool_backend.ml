@@ -7,12 +7,19 @@ let debug_perf_commands = false
 module Perf_capabilities = struct
   let bit n = Int63.of_int (1 lsl n)
   let configurable_psb_period = bit 0
+  let arbitrary_snapshot_buffer_size = bit 1
 
   include Flags.Make (struct
     let allow_intersecting = false
     let should_print_error = true
     let remove_zero_flags = false
-    let known = [ configurable_psb_period, "configurable_psb_period" ]
+
+    let known =
+      [ configurable_psb_period, "configurable_psb_period"
+      ; arbitrary_snapshot_buffer_size
+      ; "arbitrary_snapshot_buffer_size"
+      ]
+    ;;
   end)
 
   module Version = struct
@@ -42,6 +49,16 @@ module Perf_capabilities = struct
     String.( = ) cyc_cap "1\n"
   ;;
 
+  let perf_event_paranoid () =
+    In_channel.read_all "/proc/sys/kernel/perf_event_paranoid" |> Int.of_string
+  ;;
+
+  let supports_arbitrary_snapshot_buffer_size () =
+    match perf_event_paranoid () with
+    | -1 -> true
+    | _ -> Core_unix.geteuid () = 0
+  ;;
+
   let detect_exn () =
     let%bind perf_version_proc =
       Process.create_exn ~prog:"perf" ~args:[ "--version" ] ()
@@ -52,6 +69,11 @@ module Perf_capabilities = struct
     let capabilities =
       if supports_configurable_psb_period ()
       then capabilities + configurable_psb_period
+      else capabilities
+    in
+    let capabilities =
+      if supports_arbitrary_snapshot_buffer_size ()
+      then capabilities + arbitrary_snapshot_buffer_size
       else capabilities
     in
     capabilities
@@ -135,7 +157,7 @@ module Recording = struct
     let res = Core_unix.wait_nohang (`Pid perf_pid) in
     let%map.Or_error () =
       match res with
-      | Some (_, exit) -> perf_exit_to_or_error exit
+      | Some (_, exit) -> Core.eprint_s [%message "we failed"]; perf_exit_to_or_error exit
       | _ -> Ok ()
     in
     { can_snapshot = not full_execution; pid = perf_pid }
